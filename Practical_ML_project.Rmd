@@ -1,0 +1,162 @@
+## Automated classification of typical errors made during a physical excercise
+   
+### Executive Summary
+
+* <b> Goal</b>: the goal of this report is mainly to propose an algorithm
+for an automated classification of errors performed during a specific physical
+excercise (classes: A, B, C, D, E). The classification is performed on data taken by wearable accelerometers 
+(the data is available at URL: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv). 
+In addition, a classes are given for the test data; 20 cases available 
+at URL: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv.
+
+* <b> Method</b>: following method found in an original paper of Velloso <i> et al. </i> 
+related to the data at hand (Ref. [1]), the feature selection 
+was based on <i> Correlation-based Feature Selection </i> algorithm implemented in R library <i>FSelector</i>.
+In this way, I obtained a set of seven features to be employed in a development of a classification model.
+The chosen method was a **random forrest** implemented in the <i> caret </i> R library. 
+The optimal model selection was based on accuracy criterium. I estimated out-of-sample accuracy by application of the fitted
+model to the testing data (20% of the total data), which was never used in the process of model development.
+
+* <b> Results</b>: An estimated accuracy by means of <i> confusionMatrix </i> function applied to the fitted model on the testing data is:
+<b> 0.989 with 95% CI: (0.9853, 0.9921) </b>.
+
+
+### Preliminary data analysis
+
+Our analysis was performed with the help of <i>R</i> statistical programming language
+and since this report was written with Knit package it contains chunks of the <i>R</i> code.
+
+In the first step, the employed libraries and the data are loaded.
+
+```{r LoadData, echo = TRUE, cache = FALSE}
+###### Practical Machine Learning, Project
+library("caret")
+library("FSelector")
+library("knitr")
+
+# Load the training data
+data <- read.csv("pml-training.csv")
+
+# Load the test data
+test_data <- read.csv("pml-testing.csv")
+```
+
+In the second step, I am going to check what kind of data are available in the programming (prediction) assignment
+and then focus only on those variables for which useful data are available in "pml-testing.csv" file.
+It occurs, that in "pml-testing.csv" file many variables takes solely "NA" value, which means they are of no use to us. For this reason, I will disregard these variables in a development of my model.
+
+In addition, there are some variables, namely: "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window", "X", "problem_id" that are rather clearly irrelevant to the task at hand. They will be disregarded as well.
+
+The code for this part is shown below.
+
+```{r PreprocessData, cache = FALSE, include = FALSE, echo = TRUE}
+###### Clean and preprocess the test data to find relevant features
+# Mark and delete variables with NAs only
+removeCatNA <-function(data){
+      
+      nlevels <- numeric(ncol(data))
+      
+      for(i in (1:ncol(data))){
+            
+            nlevels[i] <- length(unique(data[,i]))
+            
+            if (nlevels[i] ==  0 | nlevels[i] ==  1 ){
+                  
+                  cat(paste("Variable", names(data)[i], "is going to be removed. \n"))
+                  nlevels[i] <- 1}
+      }
+      
+      idx <- which(nlevels == 1)
+      cat(paste(length(idx)), "variables were removed \n")
+      
+      if(length(idx) >= 1) data <- data[, -idx]
+      
+      return(data)
+}
+test_data_new <- removeCatNA(test_data)
+
+# Remove manually other rather clearly irrelevant features
+vars_irr <- c("raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window", "X", "problem_id")
+test_data_new <- test_data_new[, - which(names(test_data_new) %in% vars_irr)]
+
+# Variables to be used in classification
+vars_relevant <- names(test_data_new)
+
+###### Delete irrelevant features from the training data
+data_new <- data[, which(names(data) %in% vars_relevant)]
+data_new["classe"] <- data["classe"]
+```
+
+### Model development 
+
+The first step of the model development is the final selection of the features for the classification model.
+Following the path of the Ref. [1], I employed the Correlation-based Feature Selection (CFS) 
+algorithm, which was implemented in R library <i>FSelector</i>.
+
+```{r FeatureSelection, echo = TRUE, cache = FALSE}
+###### Feature selection by means of "cfs" function from "FSelector" package
+features <- cfs(classe ~., data_new)
+f <- as.simple.formula(features, "classe")
+
+```
+
+As a result of the above code, 7 features were selected as predictors, namely: 
+"roll_belt", "pitch_belt", "yaw_belt", "magnet_arm_x", "gyros_dumbbell_y",  
+"magnet_dumbbell_y", and "pitch_forearm".
+
+In the next step, I prepare the training and the testing data.
+
+```{r PrepareFinalData, echo = TRUE, cache = TRUE}
+
+###### Fit a Random Forrest model on the training set (80% of all data)
+inTrain <- createDataPartition(y = data_new$classe, p = 0.8, list=FALSE)
+training <- data_new[inTrain, ]
+testing <- data_new[-inTrain, ]
+
+# Remove features that were not selected
+training <- training[, c(which(names(training) %in% features), ncol(training))]
+testing <- testing[, c(which(names(testing) %in% features), ncol(testing))]
+```
+
+Now, we are ready to fit and test the model. First, we fit a <i>random forrest</i> model
+with the help of <i>train</i> function from <i>caret</i> library. For the sake of reproducibility,
+I set a seed prior to fitting of a model.
+
+```{r FitModel, echo = TRUE, cache = FALSE}
+# Start counting time
+strt <- Sys.time()
+
+# Fit random forrest
+set.seed(1)
+modelRFFit <- train(f, method = "rf", data = training)
+
+# Stop counting time
+diff_sin <- Sys.time() - strt
+print(signif(diff_sin, digits = 2))
+```
+
+### Tests
+
+In the final step, in order to obtain a realistic estimation of the out-of-sample accuracy,
+I am going to test the model on the testing data by means of the below code.
+
+```{r TestModel, echo = TRUE, cache = FALSE}
+###### Test data
+# Make prediction on the testing data
+pred_RF_test <- predict(modelRFFit, newdata = testing)
+
+# Construct the confusion matrix
+confusion_Matrix_RF <- confusionMatrix(pred_RF_test, testing$classe)
+table_cv <- confusion_Matrix_RF$table
+print(confusion_Matrix_RF)
+```
+
+As we can see, <b> the overall accuracy obtained on the out-of-sample (testing) data equals: 0.989 and the 95%
+confidence interval for that value is: (0.9853, 0.9921) </b>.
+
+
+### References
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H., "Qualitative Activity Recognition of Weight Lifting Exercises". 
+Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
